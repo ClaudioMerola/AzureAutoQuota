@@ -11,7 +11,7 @@ $Trigger = 20
 $Increase = 20
 
 <# Subscriptions to run #>
-$TargetSubscription = '3d5f753d-ef56-4b30-97c3-fb1860e8f44c','c44908f1-44a3-47f7-aae3-fbd1c0457d9c'
+$TargetSubscription = '3d5f753d-ef56-4b30-97c3-fb1860e8f44c','c44908f1-44a3-47f7-aae3-fbd1c0457f9c'
 
 
 ###############################################################  READING  #############################################################################
@@ -20,21 +20,19 @@ Clear-AzContext -Force
 
 Connect-AzAccount -Identity
 
-$Subscriptions = Get-AzContext -ListAvailable | Where-Object {$_.Subscription.State -ne 'Disabled' -and $_.Subscription.Id -in $TargetSubscription}
+$Subscriptions = Get-AzContext -ListAvailable | Where-Object {$_.Subscription.State -ne 'Disabled' -and $_.Subscription.SubscriptionId -in $TargetSubscription}
 
-Write-Output ('Running in the following Subscriptions:'+$Subscriptions.Name)
+Write-Output ('Running in: '+$Subscriptions.count+' Subscriptions.')
 
 $Subscriptions = $Subscriptions.Subscription
 
-
 $Location = Search-AzGraph -Query "resources | where type == 'microsoft.compute/virtualmachines' or type == 'microsoft.compute/virtualmachinescalesets' | summarize by location"
-
 
 $Quotas = @()
 
 foreach($sub in $Subscriptions)
     {
-        Set-azContext -Subscription $sub
+        Set-azContext -Subscription $sub | Out-Null
         foreach($Loc in $Location)
             {
                 $Quota = Get-AzVMUsage -Location $Loc.location
@@ -45,27 +43,28 @@ foreach($sub in $Subscriptions)
                     'Subscription' = $Sub;
                     'Data' = $Quota
                 }
-                $Quotas += $Q                
+                $Quotas += $Q
             }
     }
 
 ################################################################   PROCESSING    #######################################################################################
 
 $Token = Get-AzAccessToken
-
 $Token = $Token.Token
-
 $headers = @{
     Authorization="Bearer $Token"
 }
 
 foreach($Quota in $Quotas)
-    {
+    {        
         foreach($Data in $Quota.Data)
             {
-                if($Data.Name.LocalizedValue -like '*Family vCPUs')
+                if($Data.Name.LocalizedValue -like '*Family vCPUs')
                     {
-                        $PvCPU = ($Data.currentValue / $Data.limit)*100
+                        $PvCPU = ($Data.currentValue / $Data.limit)*100
+
+                        Write-Output ('')
+                        Write-Output ('Validating Quota for the Subscription: '+$Quota.Subscription+' in the location: '+[string]$Quota.Location.location)
 
                         if($PvCPU -ge $Trigger)
                             {
@@ -98,9 +97,14 @@ $Body = @"
 
                                 $Uri = "https://management.azure.com/subscriptions/$Sub/providers/Microsoft.Capacity/resourceProviders/Microsoft.Compute/locations/$Locate/serviceLimits/$FamilyName"
 
+                                <# Comment the following line if you want to just validate the script and not request the Quota increse #>
                                 $Request = Invoke-WebRequest -Uri $Uri -Headers $headers -Body $Body -Method Put -UseBasicParsing
 
                                 Write-Output ('Request Status: '+$Request.StatusCode)
+                            }
+                        else
+                            {
+                                Write-Output ('No Quota increase was needed for Subscription: '+$Quota.Subscription+' in the location: '+[string]$Quota.Location.location)
                             }
                     }
             }
